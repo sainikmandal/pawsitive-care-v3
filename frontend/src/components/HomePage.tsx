@@ -42,7 +42,7 @@ export const HomePage = () => {
           Welcome to Pawsitive Care
         </Typography>
         <Typography variant="h5" color="text.secondary" paragraph>
-          Your one-stop solution for livestock health and care
+          Your one-stop solution for Pets and Livestock health and care
         </Typography>
       </Box>
 

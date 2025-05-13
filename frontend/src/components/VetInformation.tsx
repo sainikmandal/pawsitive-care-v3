@@ -36,7 +36,7 @@ const TRUSTED_VETS: VetInfo[] = [
   },
   {
     id: 2,
-    name: "Dr. Michael Chen",
+    name: "Dr. Rashmi Singh",
     specialization: "Livestock Health Expert",
     experience: "12 years",
     location: "Kolkata, West Bengal",
@@ -46,11 +46,11 @@ const TRUSTED_VETS: VetInfo[] = [
   },
   {
     id: 3,
-    name: "Dr. Emily Rodriguez",
+    name: "DR. SAMIT KUMAR NANDI",
     specialization: "Emergency Care Specialist",
     experience: "10 years",
     location: "Kolkata, West Bengal",
-    contact: "+91 98300 00000",
+    contact: "+91 9433111065",
     imageUrl: "/vets/vet3.jpg",
     description: "24/7 emergency services with mobile veterinary unit for farm visits."
   }
