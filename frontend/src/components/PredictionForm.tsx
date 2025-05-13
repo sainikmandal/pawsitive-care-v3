@@ -209,6 +209,28 @@ export const PredictionForm = () => {
                       Confidence: {(prediction.confidence * 100).toFixed(1)}%
                     </Typography>
                   </Box>
+
+                  {/* Warning Section */}
+                  <Box sx={{ mt: 3, p: 2, bgcolor: 'warning.light', borderRadius: 1 }}>
+                    <Typography variant="h6" color="warning.dark" gutterBottom>
+                      ⚠️ Important Notice
+                    </Typography>
+                    <Typography variant="body1" color="warning.dark" paragraph>
+                      This prediction is based on machine learning and should not be considered a definitive diagnosis. 
+                      Please consult with a qualified veterinarian immediately for proper medical attention.
+                    </Typography>
+                    <Typography variant="body2" color="warning.dark" paragraph>
+                      Early intervention can significantly improve treatment outcomes. Don't delay seeking professional help.
+                    </Typography>
+                    <Button
+                      variant="contained"
+                      color="warning"
+                      href="/vets"
+                      sx={{ mt: 1 }}
+                    >
+                      Find a Trusted Veterinarian
+                    </Button>
+                  </Box>
                 </CardContent>
               </Card>
             </Box>
