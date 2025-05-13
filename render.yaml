@@ -1,0 +1,36 @@
+services:
+  # Backend service
+  - type: web
+    name: pawsitive-care-backend
+    env: python
+    buildCommand: |
+      cd backend
+      python -m venv venv
+      . venv/bin/activate
+      pip install -r requirements.txt
+    startCommand: |
+      cd backend
+      . venv/bin/activate
+      uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.9.0
+      - key: PORT
+        value: 8000
+
+  # Frontend service
+  - type: web
+    name: pawsitive-care-frontend
+    env: node
+    buildCommand: |
+      cd frontend
+      npm install
+      npm run build
+    startCommand: |
+      cd frontend
+      npm run preview -- --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: NODE_VERSION
+        value: 18.0.0
+      - key: PORT
+        value: 3000 
