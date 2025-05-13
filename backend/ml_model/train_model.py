@@ -9,60 +9,55 @@ from pathlib import Path
 import logging
 
 # Set up logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(lineno)d - %(message)s')
 logger = logging.getLogger(__name__)
 
 class DiseasePredictionModel:
     def __init__(self):
         self.model = None
-        self.label_encoders = {}  # Stores LabelEncoder for each categorical column, including target
-        self.scaler = None        # StandardScaler for numerical features
-        self.trained_feature_columns = [] # List of feature column names model was trained on
-        self.categorical_modes = {} # Stores mode for each categorical feature for handling unseen labels
-        self.target_column = 'Disease' # Name of the target variable column
+        self.label_encoders = {}
+        self.scaler = None
+        self.trained_feature_columns = []
+        self.categorical_modes = {}
+        self.target_column = 'Disease'
 
     def preprocess_data(self, df: pd.DataFrame, is_training: bool = False) -> pd.DataFrame:
-        """
-        Preprocesses the input DataFrame by applying cleaning, feature engineering,
-        encoding, and scaling.
-        """
         df_processed = df.copy()
-        logger.debug(f"Preprocessing data. Is training: {is_training}. Input df shape: {df_processed.shape}")
+        logger.debug(f"PREPROCESS (is_training={is_training}) - Initial df shape: {df_processed.shape}, Columns: {df_processed.columns.tolist()}")
+        if not is_training:
+             logger.debug(f"PREPROCESS (is_training={is_training}) - Input data head for prediction:\n{df_processed.head()}")
+
 
         try:
-            # --- 1. Lowercase and Basic Cleaning ---
             feature_cols_to_lower = ['Animal', 'Symptom 1', 'Symptom 2', 'Symptom 3']
             for col in feature_cols_to_lower:
                 if col in df_processed.columns:
                     df_processed[col] = df_processed[col].astype(str).str.lower().str.strip()
-                else: # Handle missing input columns for prediction robustness
-                    logger.warning(f"Feature column '{col}' not found in input for preprocessing. Filling with 'unknown'.")
+                else:
+                    if not is_training: logger.warning(f"PREPROCESS: Input column '{col}' missing for preprocessing. Filling with 'unknown'.")
                     df_processed[col] = 'unknown'
             
-            # Ensure numerical columns are numeric, fill NaNs with median (or 0 if all NaN)
             numerical_cols_raw = ['Age', 'Temperature']
             for col in numerical_cols_raw:
                 if col in df_processed.columns:
                     df_processed[col] = pd.to_numeric(df_processed[col], errors='coerce')
-                    if is_training: # Calculate median from training data only
+                    if is_training:
                         median_val = df_processed[col].median()
-                        # Store median for use in prediction if needed, though we usually expect non-null inputs
-                        # For simplicity here, we just fill. A more robust approach might store these medians.
                         df_processed[col] = df_processed[col].fillna(median_val if not pd.isna(median_val) else 0)
-                    else: # For prediction, fill with 0 or a pre-calculated median if available
-                        df_processed[col] = df_processed[col].fillna(0) # Simple fill for prediction
+                    else: 
+                        if df_processed[col].isnull().any():
+                            logger.warning(f"PREPROCESS: NaN found in numerical column '{col}' during prediction. Filling with 0.")
+                            df_processed[col] = df_processed[col].fillna(0)
                 else:
-                    logger.warning(f"Numerical column '{col}' not found. Filling with 0.")
+                    if not is_training: logger.warning(f"PREPROCESS: Numerical column '{col}' missing. Filling with 0.")
                     df_processed[col] = 0
 
-
-            # --- 2. Feature Engineering ---
-            symptom_cols_for_combination = ['Symptom 1', 'Symptom 2', 'Symptom 3']
-            # Ensure these columns exist (they should due to the loop above)
-            df_processed['Symptom_Combination'] = df_processed.apply(
-                lambda x: '_'.join(sorted([str(x[s_col]) for s_col in symptom_cols_for_combination])),
-                axis=1
-            )
+            # Symptom_Combination feature REMOVED
+            # symptom_cols_for_combination = ['Symptom 1', 'Symptom 2', 'Symptom 3']
+            # df_processed['Symptom_Combination'] = df_processed.apply(
+            #     lambda x: '_'.join(sorted([str(x[s_col]) for s_col in symptom_cols_for_combination])),
+            #     axis=1
+            # )
 
             df_processed['Temperature_Category'] = pd.cut(
                 df_processed['Temperature'],
@@ -81,53 +76,52 @@ class DiseasePredictionModel:
             df_processed['Age_Temperature'] = df_processed['Age_Category'] + '_' + df_processed['Temperature_Category']
             df_processed['Animal_Age'] = df_processed['Animal'] + '_' + df_processed['Age_Category']
             
-            logger.debug("Feature engineering complete.")
+            if not is_training: logger.debug(f"PREPROCESS: After feature engineering:\n{df_processed.head()}")
 
-            # --- 3. Encoding Categorical Features ---
             categorical_features_to_encode = [
                 'Animal', 'Symptom 1', 'Symptom 2', 'Symptom 3',
-                'Symptom_Combination', 'Temperature_Category',
+                # 'Symptom_Combination', # REMOVED
+                'Temperature_Category',
                 'Age_Category', 'Age_Temperature', 'Animal_Age'
             ]
 
             for col in categorical_features_to_encode:
-                df_processed[col] = df_processed[col].astype(str) # Ensure string type
+                df_processed[col] = df_processed[col].astype(str)
                 if is_training:
                     self.categorical_modes[col] = df_processed[col].mode()[0] if not df_processed[col].mode().empty else 'unknown'
                     le = LabelEncoder()
-                    # Fit on unique values including a placeholder for unseen labels
                     unique_values = list(df_processed[col].unique())
-                    if 'unknown_label_placeholder' not in unique_values:
+                    if 'unknown_label_placeholder' not in unique_values: 
                         unique_values.append('unknown_label_placeholder')
                     le.fit(unique_values)
                     self.label_encoders[col] = le
                     df_processed[col] = le.transform(df_processed[col])
-                else: # Prediction
+                else: 
                     if col in self.label_encoders:
                         le = self.label_encoders[col]
                         transformed_col_values = []
-                        for label in df_processed[col]:
+                        for label_idx, label in enumerate(df_processed[col]):
                             if label in le.classes_:
                                 transformed_col_values.append(le.transform([label])[0])
                             else:
-                                logger.warning(f"Unseen label '{label}' in column '{col}' during prediction. Mapping to 'unknown_label_placeholder'.")
+                                logger.warning(f"PREPROCESS: Unseen label '{label}' in column '{col}' (row {label_idx}) during prediction. Mapping to 'unknown_label_placeholder'.")
                                 if 'unknown_label_placeholder' in le.classes_:
                                     transformed_col_values.append(le.transform(['unknown_label_placeholder'])[0])
-                                else: # Fallback: use stored mode
-                                    mode_val = self.categorical_modes.get(col, 'unknown')
-                                    logger.warning(f"Using mode '{mode_val}' for unseen label '{label}' in '{col}'.")
+                                else:
+                                    mode_val = self.categorical_modes.get(col, 'unknown_label_placeholder') 
+                                    logger.warning(f"PREPROCESS: 'unknown_label_placeholder' not in classes for '{col}'. Using mode '{mode_val}'.")
                                     if mode_val in le.classes_:
                                         transformed_col_values.append(le.transform([mode_val])[0])
-                                    else: # Ultimate fallback: 0
-                                        logger.error(f"Mode '{mode_val}' for '{col}' also unseen. Defaulting to 0 for '{label}'.")
+                                    else:
+                                        logger.error(f"PREPROCESS: Mode '{mode_val}' for '{col}' also unseen. Defaulting to 0 for '{label}'. This is problematic.")
                                         transformed_col_values.append(0) 
                         df_processed[col] = transformed_col_values
                     else:
-                        logger.error(f"LabelEncoder for column '{col}' not found during prediction. Filling with 0. This is critical.")
-                        df_processed[col] = 0 # Placeholder for missing encoder
-            logger.debug("Categorical encoding complete.")
+                        logger.error(f"PREPROCESS: LabelEncoder for column '{col}' not found during prediction. Filling with 0. Model performance will be poor.")
+                        df_processed[col] = 0
+            
+            if not is_training: logger.debug(f"PREPROCESS: After categorical encoding:\n{df_processed[categorical_features_to_encode].head()}")
 
-            # --- 4. Scaling Numerical Features ---
             numerical_features_to_scale = ['Age', 'Temperature']
             if is_training:
                 self.scaler = StandardScaler()
@@ -136,41 +130,41 @@ class DiseasePredictionModel:
                 if self.scaler and hasattr(self.scaler, 'mean_'):
                     df_processed[numerical_features_to_scale] = self.scaler.transform(df_processed[numerical_features_to_scale])
                 else:
-                    logger.warning("Scaler not fitted or found. Numerical features will not be scaled for this prediction.")
-                    # Ensure columns exist even if not scaled
-                    for num_col in numerical_features_to_scale:
-                        if num_col not in df_processed.columns:
-                            df_processed[num_col] = 0
-            logger.debug("Numerical scaling complete.")
+                    logger.warning("PREPROCESS: Scaler not fitted or found. Numerical features will not be scaled for this prediction.")
+            
+            if not is_training: logger.debug(f"PREPROCESS: After numerical scaling:\n{df_processed[numerical_features_to_scale].head()}")
 
-            # --- 5. Define and Select Final Feature Columns ---
-            # These are the columns that go into the model
+            # Define the final list of features for the model
             final_model_features = categorical_features_to_encode + numerical_features_to_scale
             
             if is_training:
                 self.trained_feature_columns = final_model_features
-                logger.info(f"Model will be trained on columns: {self.trained_feature_columns}")
+                logger.info(f"PREPROCESS: Model will be trained on columns: {self.trained_feature_columns}")
 
-            # Ensure all trained_feature_columns are present for prediction, and in the correct order
             output_df = pd.DataFrame()
             columns_to_use = self.trained_feature_columns if not is_training and self.trained_feature_columns else final_model_features
             
+            missing_during_selection = []
             for col_name in columns_to_use:
                 if col_name in df_processed:
                     output_df[col_name] = df_processed[col_name]
                 else:
-                    logger.error(f"CRITICAL: Column '{col_name}' missing from processed DataFrame for model input. Filling with 0.")
-                    output_df[col_name] = 0 # This indicates a serious problem in preprocessing logic
+                    logger.error(f"PREPROCESS CRITICAL: Column '{col_name}' missing from processed DataFrame for model input. Filling with 0.")
+                    output_df[col_name] = 0 
+                    missing_during_selection.append(col_name)
             
-            logger.debug(f"Preprocessing complete. Output df shape: {output_df.shape}, Columns: {output_df.columns.tolist()}")
+            if missing_during_selection:
+                 logger.error(f"PREPROCESS: The following columns were missing and filled with 0 before returning: {missing_during_selection}")
+
+            logger.debug(f"PREPROCESS (is_training={is_training}) - Preprocessing complete. Output df shape: {output_df.shape}, Columns: {output_df.columns.tolist()}")
+            if not is_training: logger.debug(f"PREPROCESS (is_training={is_training}) - Final preprocessed data head for prediction:\n{output_df.head()}")
             return output_df
 
         except Exception as e:
-            logger.error(f"Error during preprocessing: {e}", exc_info=True)
+            logger.error(f"Error during preprocessing (is_training={is_training}): {e}", exc_info=True)
             raise
 
     def train_model(self, data_path: Path):
-        """Trains the Random Forest model, including preprocessing and hyperparameter tuning."""
         logger.info(f"Starting model training process using data from: {data_path}")
         try:
             df_original = pd.read_csv(data_path)
@@ -195,9 +189,11 @@ class DiseasePredictionModel:
         logger.info("Encoding target variable (y)...")
         target_le = LabelEncoder()
         y_encoded = target_le.fit_transform(y_raw)
-        self.label_encoders[self.target_column] = target_le # Store for inverse_transform later
+        self.label_encoders[self.target_column] = target_le
         
-        logger.info(f"Class distribution in target variable:\n{y_raw.value_counts(normalize=True)}")
+        logger.info(f"Class distribution in target variable (encoded):\n{pd.Series(y_encoded).value_counts(normalize=True)}")
+        logger.info(f"Target classes learned by encoder: {list(target_le.classes_)}")
+
 
         X_train, X_test, y_train, y_test = train_test_split(
             X_processed, y_encoded, test_size=0.2, random_state=42, stratify=y_encoded
@@ -205,7 +201,7 @@ class DiseasePredictionModel:
         logger.info(f"Data split into training and testing sets. Train shape: {X_train.shape}, Test shape: {X_test.shape}")
 
         param_grid = {
-            'n_estimators': [100, 200], # Keep it small for faster initial runs
+            'n_estimators': [100, 200],
             'max_depth': [10, 20, None],
             'min_samples_split': [2, 5],
             'min_samples_leaf': [1, 2],
@@ -219,10 +215,10 @@ class DiseasePredictionModel:
         grid_search = GridSearchCV(
             estimator=rf_model,
             param_grid=param_grid,
-            cv=3, # Use 3-5 folds. 3 for speed here.
-            n_jobs=-1, # Use all available cores
+            cv=3, 
+            n_jobs=-1,
             verbose=1,
-            scoring='f1_weighted' # Good for potentially imbalanced classes
+            scoring='f1_weighted'
         )
         
         grid_search.fit(X_train, y_train)
@@ -242,25 +238,25 @@ class DiseasePredictionModel:
             logger.warning(f"Could not generate classification report with target names: {report_err}")
             logger.info("\n" + classification_report(y_test, y_pred_test, zero_division=0))
         
-        if hasattr(self.model, 'feature_importances_') and self.trained_feature_columns:
+        if hasattr(self.model, 'feature_importances_') and self.trained_feature_columns and len(self.trained_feature_columns) == len(self.model.feature_importances_):
             feature_importances_df = pd.DataFrame({
                 'feature': self.trained_feature_columns,
                 'importance': self.model.feature_importances_
             }).sort_values(by='importance', ascending=False)
             logger.info("\nTop 10 Feature Importances:")
             logger.info(f"\n{feature_importances_df.head(10)}")
+        else:
+            logger.warning("Could not log feature importances: Mismatch in feature column length or model has no feature_importances_ attribute.")
+
 
         logger.info("Model training complete.")
         return accuracy_score(y_test, y_pred_test)
 
     def save_model_artifacts(self, model_dir_path: Path):
-        """Saves the trained model and all associated preprocessing artifacts."""
         model_dir_path.mkdir(parents=True, exist_ok=True)
-        
         if not self.model:
             logger.error("Model is not trained. Cannot save artifacts.")
             raise ValueError("Model not trained.")
-
         try:
             joblib.dump(self.model, model_dir_path / 'model.joblib')
             joblib.dump(self.label_encoders, model_dir_path / 'label_encoders.joblib')
@@ -273,7 +269,6 @@ class DiseasePredictionModel:
             raise
 
     def load_model_artifacts(self, model_dir_path: Path):
-        """Loads the trained model and all associated preprocessing artifacts."""
         if not model_dir_path.exists():
             logger.error(f"Model directory not found: {model_dir_path}")
             raise FileNotFoundError(f"Model directory not found: {model_dir_path}")
@@ -292,56 +287,74 @@ class DiseasePredictionModel:
             raise
 
     def predict(self, input_data_df: pd.DataFrame) -> tuple[str, float]:
-        """
-        Makes a disease prediction on preprocessed input data.
-        Assumes input_data_df is a single row DataFrame.
-        """
+        logger.info("PREDICT: Starting prediction process...")
+        logger.debug(f"PREDICT: Raw input DataFrame to predict method:\n{input_data_df}")
+
         if not self.model:
-            logger.error("Model is not loaded. Cannot make predictions.")
+            logger.error("PREDICT: Model is not loaded. Cannot make predictions.")
             raise ValueError("Model not loaded.")
         if not self.trained_feature_columns:
-            logger.error("Trained feature columns list is empty. Model may not be loaded correctly.")
+            logger.error("PREDICT: Trained feature columns list is empty. Model may not be loaded correctly.")
             raise ValueError("Trained feature columns not available.")
 
-        logger.debug(f"Predicting on input data: \n{input_data_df}")
-        
-        # Preprocess the input data (is_training=False)
-        X_processed = self.preprocess_data(input_data_df, is_training=False)
-        
-        # Ensure columns are in the same order as during training
+        X_processed_for_predict = self.preprocess_data(input_data_df, is_training=False)
+        logger.debug(f"PREDICT: DataFrame after preprocessing (before column alignment):\n{X_processed_for_predict}")
+        logger.debug(f"PREDICT: Columns in X_processed_for_predict: {X_processed_for_predict.columns.tolist()}")
+        logger.debug(f"PREDICT: Expected trained_feature_columns: {self.trained_feature_columns}")
+
+
         try:
-            X_processed = X_processed[self.trained_feature_columns]
+            final_X_for_model = pd.DataFrame(columns=self.trained_feature_columns)
+            for col in self.trained_feature_columns:
+                if col in X_processed_for_predict.columns:
+                    final_X_for_model[col] = X_processed_for_predict[col]
+                else:
+                    logger.error(f"PREDICT CRITICAL: Column '{col}' from trained_feature_columns is MISSING in X_processed_for_predict. Filling with 0.")
+                    final_X_for_model[col] = 0 
+            final_X_for_model = final_X_for_model[self.trained_feature_columns]
+
         except KeyError as e:
-            missing_cols = set(self.trained_feature_columns) - set(X_processed.columns)
-            extra_cols = set(X_processed.columns) - set(self.trained_feature_columns)
-            logger.error(f"Column mismatch error during prediction. Missing: {missing_cols}, Extra: {extra_cols}. Error: {e}", exc_info=True)
+            missing_cols = set(self.trained_feature_columns) - set(X_processed_for_predict.columns)
+            extra_cols = set(X_processed_for_predict.columns) - set(self.trained_feature_columns)
+            logger.error(f"PREDICT: Column mismatch error during prediction. Missing: {missing_cols}, Extra: {extra_cols}. Error: {e}", exc_info=True)
             raise ValueError(f"Feature mismatch during prediction. Missing: {missing_cols}, Extra: {extra_cols}")
 
-        logger.debug(f"Data processed for prediction. Shape: {X_processed.shape}, Columns: {X_processed.columns.tolist()}")
+        logger.info(f"PREDICT: Final feature vector shape for model: {final_X_for_model.shape}")
+        logger.debug(f"PREDICT: Final feature vector columns for model: {final_X_for_model.columns.tolist()}")
+        logger.debug(f"PREDICT: Final feature vector values (numeric array) being fed to model.predict():\n{final_X_for_model.values}")
 
-        prediction_encoded = self.model.predict(X_processed)[0]
-        probabilities = self.model.predict_proba(X_processed)[0]
+
+        prediction_encoded = self.model.predict(final_X_for_model)[0]
+        probabilities = self.model.predict_proba(final_X_for_model)[0]
         
-        predicted_disease_label = self.label_encoders[self.target_column].inverse_transform([prediction_encoded])[0]
-        confidence = float(max(probabilities)) # Max probability for the predicted class
+        target_label_encoder = self.label_encoders.get(self.target_column)
+        if not target_label_encoder:
+            logger.error("PREDICT: Target label encoder not found! Cannot decode prediction.")
+            raise ValueError("Target label encoder missing.")
+
+        predicted_disease_label = target_label_encoder.inverse_transform([prediction_encoded])[0]
         
-        logger.info(f"Prediction: {predicted_disease_label}, Confidence: {confidence:.4f}")
+        try:
+            class_names = target_label_encoder.classes_
+            log_probs = {class_names[i]: f"{prob:.4f}" for i, prob in enumerate(probabilities)}
+            logger.info(f"PREDICT: Prediction probabilities for all classes:\n{log_probs}")
+        except Exception as e_prob:
+            logger.warning(f"PREDICT: Could not log detailed probabilities with class names: {e_prob}")
+            logger.info(f"PREDICT: Raw probabilities: {probabilities}")
+
+        confidence = float(probabilities[prediction_encoded]) 
+        
+        logger.info(f"PREDICT: Final prediction: '{predicted_disease_label}', Confidence: {confidence:.4f}")
         return predicted_disease_label, confidence
 
-# Main execution block for training
 if __name__ == "__main__":
     logger.info("Executing train_model.py script...")
-    
-    # Define paths
-    # Assumes this script (train_model.py) is in backend/ml_model/
-    # Dataset is expected in project_root/ (i.e., backend/../../)
     PROJECT_ROOT = Path(__file__).parent.parent.parent 
     DATASET_PATH = PROJECT_ROOT / "animal_disease_dataset - animal_disease_dataset.csv.csv"
     SAVED_MODEL_DIR = Path(__file__).parent / "saved_model"
 
     if not DATASET_PATH.exists():
         logger.error(f"FATAL: Dataset not found at the expected path: {DATASET_PATH}")
-        logger.error("Please ensure 'animal_disease_dataset - animal_disease_dataset.csv.csv' is in the project root directory.")
     else:
         model_trainer = DiseasePredictionModel()
         try:
@@ -351,24 +364,27 @@ if __name__ == "__main__":
             model_trainer.save_model_artifacts(SAVED_MODEL_DIR)
             logger.info(f"Model artifacts saved to: {SAVED_MODEL_DIR}")
 
-            # Example of loading and making a test prediction (optional)
             logger.info("\n--- Test: Loading model and making a sample prediction ---")
             loaded_model = DiseasePredictionModel()
             loaded_model.load_model_artifacts(SAVED_MODEL_DIR)
-            
-            # Create a sample DataFrame for prediction (must match expected raw input structure)
-            # This sample should be representative of what the API might receive
             sample_raw_data = pd.DataFrame([{
-                'Animal': 'cow',
-                'Age': 3,
-                'Temperature': 102.5,
-                'Symptom 1': 'fever',
-                'Symptom 2': 'loss of appetite',
-                'Symptom 3': 'lameness'
-                # Add other raw features if your model expects them before preprocessing
+                'Animal': 'cow', 'Age': 3, 'Temperature': 105.6, 
+                'Symptom 1': 'swelling in muscle', 
+                'Symptom 2': 'swelling in limb', 
+                'Symptom 3': 'swelling in abdomen'
             }])
             predicted_disease, confidence = loaded_model.predict(sample_raw_data)
             logger.info(f"Sample Prediction on loaded model -> Disease: {predicted_disease}, Confidence: {confidence:.2f}")
+
+            sample_raw_data_2 = pd.DataFrame([{ 
+                'Animal': 'cow', 'Age': 4.0, 'Temperature': 103.1,
+                'Symptom 1': 'fever', 
+                'Symptom 2': 'lameness', 
+                'Symptom 3': 'loss of appetite' 
+            }])
+            logger.info(f"\n--- Test 2: Predicting with potentially unseen 'fever' ---")
+            predicted_disease_2, confidence_2 = loaded_model.predict(sample_raw_data_2)
+            logger.info(f"Sample Prediction 2 -> Disease: {predicted_disease_2}, Confidence: {confidence_2:.2f}")
 
         except Exception as e:
             logger.error(f"An error occurred during the main training script execution: {e}", exc_info=True)
